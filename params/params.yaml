@@ -1,0 +1,8 @@
+mqtt_ros_node:
+  ros__parameters:
+    mqtt_broker: "localhost"
+    mqtt_port: 1883
+    client_id: "mqtt_ros_client"
+    mqtt_topic: "smarthome/flat_camera/"
+    msgs_type: "ObjectRegion3DArray"
+    ros_topic: "/object_detection/objects_with_region"
