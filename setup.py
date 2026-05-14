@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     entry_points={
         'console_scripts': [
-            'mqtt_ros_node = mqtt_ros.mqtt_ros_node:main'
+            'mqtt_ros_node = mqtt_ros.mqtt_ros:main'
         ],
     },
 )
