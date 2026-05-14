@@ -33,7 +33,12 @@ class FlatCameraParser(MQTTMessageParser):
         Expected input format:
         {
             "object_name": "table",
-            "region": "unknown"
+            "region": "unknown",
+            "bbox_center": {
+                "x": 1.5,
+                "y": 2.3,
+                "z": 0.5
+            }
         }
         """
         try:
@@ -47,6 +52,7 @@ class FlatCameraParser(MQTTMessageParser):
             # Extract object_name and region from MQTT data
             object_name = data.get('object_name', '')
             region = data.get('region', 'unknown')
+            bbox_center = data.get('bbox_center', {})
             
             if not object_name:
                 node.get_logger().warn('No "object_name" field in MQTT data')
@@ -65,9 +71,21 @@ class FlatCameraParser(MQTTMessageParser):
             hypothesis_with_pose.hypothesis.class_id = str(object_name)
             hypothesis_with_pose.hypothesis.score = 0.0
             
-            # Set pose with default values
+            # Set pose with bbox center if available
             hypothesis_with_pose.pose = PoseWithCovariance()
             hypothesis_with_pose.pose.pose = Pose()
+            
+            # Fill position from bbox_center if available
+            if bbox_center:
+                hypothesis_with_pose.pose.pose.position.x = float(bbox_center.get('x', 0.0))
+                hypothesis_with_pose.pose.pose.position.y = float(bbox_center.get('y', 0.0))
+                hypothesis_with_pose.pose.pose.position.z = float(bbox_center.get('z', 0.0))
+            
+            # Set default orientation (identity quaternion)
+            hypothesis_with_pose.pose.pose.orientation.x = 0.0
+            hypothesis_with_pose.pose.pose.orientation.y = 0.0
+            hypothesis_with_pose.pose.pose.orientation.z = 0.0
+            hypothesis_with_pose.pose.pose.orientation.w = 1.0
             
             detection.results.append(hypothesis_with_pose)
             

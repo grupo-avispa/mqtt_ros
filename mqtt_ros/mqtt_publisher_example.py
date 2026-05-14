@@ -48,7 +48,7 @@ class MQTTObjectPublisher:
             return False
         return True
     
-    def publish_object(self, object_name: str, region: str, mqtt_topic: str = 'smarthome/flat_camera/'):
+    def publish_object(self, object_name: str, region: str, mqtt_topic: str = 'smarthome/flat_camera/', bbox_center: Optional[dict] = None):
         """
         Publish an object detection message to MQTT.
         
@@ -56,11 +56,20 @@ class MQTTObjectPublisher:
             object_name: The name of the detected object (e.g., 'chair')
             region: The region where the object is located (e.g., 'kitchen')
             mqtt_topic: The MQTT topic to publish to
+            bbox_center: Optional dict with 'x', 'y', 'z' coordinates of bbox center
         """
         message = {
             'object_name': object_name,
             'region': region
         }
+        
+        # Add bbox_center if provided
+        if bbox_center:
+            message['bbox_center'] = {
+                'x': float(bbox_center.get('x', 0.0)),
+                'y': float(bbox_center.get('y', 0.0)),
+                'z': float(bbox_center.get('z', 0.0))
+            }
         
         try:
             result = self.client.publish(mqtt_topic, json.dumps(message), qos=1)
@@ -77,13 +86,22 @@ class MQTTObjectPublisher:
         Publish multiple objects sequentially with delay.
         
         Args:
-            objects: List of tuples (object_name, region)
+            objects: List of tuples (object_name, region) or dicts with object_name, region, bbox_center
             mqtt_topic: The MQTT topic to publish to
             interval: Time in seconds between publications
         """
-        for object_name, region in objects:
-            self.publish_object(object_name, region, mqtt_topic)
-            if objects.index((object_name, region)) < len(objects) - 1:
+        for idx, obj in enumerate(objects):
+            if isinstance(obj, dict):
+                self.publish_object(
+                    obj['object_name'], 
+                    obj['region'], 
+                    mqtt_topic,
+                    obj.get('bbox_center')
+                )
+            else:
+                self.publish_object(obj[0], obj[1], mqtt_topic)
+            
+            if idx < len(objects) - 1:
                 time.sleep(interval)
     
     def disconnect(self):
@@ -123,6 +141,24 @@ def main():
         help='Region name (e.g., kitchen, bedroom, hallway)'
     )
     parser.add_argument(
+        '--x',
+        type=float,
+        default=None,
+        help='X coordinate of bbox center'
+    )
+    parser.add_argument(
+        '--y',
+        type=float,
+        default=None,
+        help='Y coordinate of bbox center'
+    )
+    parser.add_argument(
+        '--z',
+        type=float,
+        default=None,
+        help='Z coordinate of bbox center'
+    )
+    parser.add_argument(
         '--loop',
         type=int,
         default=1,
@@ -148,13 +184,25 @@ def main():
     if not publisher.connect():
         return 1
     
+    # Prepare bbox_center if coordinates were provided
+    bbox_center = None
+    if args.x is not None or args.y is not None or args.z is not None:
+        bbox_center = {
+            'x': args.x if args.x is not None else 0.0,
+            'y': args.y if args.y is not None else 0.0,
+            'z': args.z if args.z is not None else 0.0
+        }
+    
     try:
         # Publish object(s)
         if args.loop == 1:
-            publisher.publish_object(args.object, args.region, args.topic)
+            publisher.publish_object(args.object, args.region, args.topic, bbox_center)
         else:
-            objects = [(args.object, args.region)] * args.loop
-            publisher.publish_multiple(objects, args.topic, args.interval)
+            # For multiple publications, publish the same object multiple times
+            for i in range(args.loop):
+                publisher.publish_object(args.object, args.region, args.topic, bbox_center)
+                if i < args.loop - 1:
+                    time.sleep(args.interval)
     finally:
         publisher.disconnect()
     
