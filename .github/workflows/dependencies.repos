@@ -1,5 +1,5 @@
 repositories:
-  - object_with_region:
-      type: git
-      url: https://github.com/grupo-avispa//object_with_region.git
-      version: main
+  object_with_region:
+    type: git
+    url: https://github.com/grupo-avispa/object_with_region.git
+    version: main
