@@ -2,6 +2,7 @@
 
 ![ROS2](https://img.shields.io/badge/ros2-jazzy-blue?logo=ros&logoColor=white)
 ![License](https://img.shields.io/github/license/grupo-avispa/mqtt_ros)
+[![Build](https://github.com/grupo-avispa/mqtt_ros/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/grupo-avispa/mqtt_ros/actions/workflows/build.yml)
 
 ## Overview
 
