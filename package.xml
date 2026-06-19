@@ -1,19 +1,28 @@
 <?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>mqtt_ros</name>
   <version>0.0.1</version>
-  <description>ROS2 node for bridge MQTT messages to ROS2 topics</description>
-  <maintainer email="jgaleas@uma.es">Usuario</maintainer>
-  <license>Apache License 2.0</license>
-
-  <buildtool_depend>ament_python</buildtool_depend>
+  <description>ROS 2 bridge node that republishes MQTT messages as ROS 2 topics.</description>
+  <maintainer email="jgaleas@uma.es">Jose Galeas</maintainer>
+  <license>Apache-2.0</license>
+  <author email="jgaleas@uma.es">Jose Galeas</author>
 
   <depend>rclpy</depend>
-  <depend>rclpy_action</depend>
-  <depend>std_msgs</depend>
-  <depend>rosidl_default_generators</depend>
+  <depend>geometry_msgs</depend>
+  <depend>vision_msgs</depend>
+  <depend>object_with_region</depend>
+  <depend>python3-paho-mqtt</depend>
 
-  <exec_depend>rosidl_default_runtime</exec_depend>
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>ament_xmllint</test_depend>
+  <test_depend>launch</test_depend>
+  <test_depend>launch_ros</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

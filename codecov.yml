@@ -1,0 +1,8 @@
+fixes:
+  - "mqtt_ros::"
+
+ignore:
+  - "*/**/test/*"
+  - "*/test/**/*"
+  - "**/test_*.*"
+  - "**/main*.*"

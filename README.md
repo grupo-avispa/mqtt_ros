@@ -1,205 +1,136 @@
-# MQTT to ROS Bridge
+# mqtt_ros
 
-A flexible and configurable ROS 2 node that acts as a bridge between MQTT brokers and the ROS ecosystem. This node listens to MQTT topics and republishes the messages as ROS messages.
+![ROS2](https://img.shields.io/badge/ros2-jazzy-blue?logo=ros&logoColor=white)
+![License](https://img.shields.io/github/license/grupo-avispa/mqtt_ros)
 
 ## Overview
 
-The MQTT to ROS Bridge provides a general-purpose solution for integrating MQTT-based systems with ROS applications. All aspects of the bridge are configurable through ROS parameters, including the MQTT broker connection details, input/output topics, and message types.
+`mqtt_ros` is a ROS 2 bridge node that subscribes to an MQTT broker and
+republishes the received messages as ROS 2 topics. The translation from the
+MQTT JSON payload to a ROS 2 message is delegated to topic-specific *parsers*,
+so support for new MQTT message formats can be added without touching the
+node logic.
 
-### Features
+The package currently ships the `FlatCameraParser`, which converts
+`smarthome/flat_camera/` object-detection payloads into
+`object_with_region/ObjectRegion3DArray` messages.
 
-- **Configurable MQTT Connection**: Specify broker address, port, and client ID via parameters
-- **Flexible Topic Mapping**: Map any MQTT topic to any ROS topic through parameters
-- **JSON Support**: Automatically parses JSON payloads and enriches messages with metadata
-- **Metadata Enrichment**: Adds timestamp and source topic information to all messages
-- **Async Message Processing**: Uses threaded MQTT loop for non-blocking message handling
-- **Logging**: Comprehensive ROS logging for debugging and monitoring
+**Keywords:** ROS2, MQTT, bridge, object detection
+
+**Author: Jose Galeas**
+
+This package has been tested under [ROS2] Rolling on [Ubuntu] 24.04. This is
+research code; expect that it changes often and any fitness for a particular
+purpose is disclaimed.
 
 ## Installation
 
 ### Dependencies
 
-```bash
-pip3 install paho-mqtt
-```
+- [Robot Operating System (ROS) 2](https://docs.ros.org/en/rolling/)
+- [paho-mqtt](https://pypi.org/project/paho-mqtt/) (MQTT client library)
+- `object_with_region` (provides the `ObjectRegion3DArray` message)
 
-Or install via rosdep from the package's `package.xml`:
+Install the ROS dependencies with rosdep from the workspace root:
 
 ```bash
 rosdep install --from-paths src --ignore-src -y
 ```
 
-## Configuration
+If `paho-mqtt` is not available through rosdep on your system, install it
+with pip:
 
-All parameters can be set in a launch file or via command-line arguments. The following parameters are available:
+```bash
+pip install -r src/mqtt_ros/requirements.txt
+```
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `mqtt_broker` | string | `localhost` | MQTT broker hostname or IP address |
-| `mqtt_port` | int | `1883` | MQTT broker port |
-| `client_id` | string | `mqtt_ros_client` | MQTT client identifier |
-| `mqtt_topic` | string | `smarthome/flat_camera/` | MQTT topic(s) to subscribe to (supports wildcards) |
-| `ros_topic` | string | `/camera/image_raw` | ROS topic to publish messages to |
+### Building
+
+```bash
+cd ~/ros2_ws
+colcon build --symlink-install --packages-select mqtt_ros
+source install/setup.bash
+```
 
 ## Usage
 
-### Launch with Default Parameters
+Launch the bridge with the default parameters:
 
 ```bash
 ros2 launch mqtt_ros mqtt_ros.launch.py
 ```
 
-### Launch with Custom Parameters
+Launch with a custom parameters file or log level:
 
 ```bash
 ros2 launch mqtt_ros mqtt_ros.launch.py \
-  mqtt_broker:=192.168.1.100 \
-  mqtt_port:=1883 \
-  mqtt_topic:=sensors/temperature \
-  ros_topic:=/sensors/temperature_reading
+  params_file:=/path/to/custom_params.yaml \
+  log_level:=debug
 ```
 
-### Using a Configuration File
-
-Create a `params.yaml` file:
-
-```yaml
-mqtt_ros_bridge:
-  ros__parameters:
-    mqtt_broker: "broker.example.com"
-    mqtt_port: 1883
-    client_id: "my_ros_client"
-    mqtt_topic: "building/floor1/room1/#"
-    ros_topic: "/sensors/data"
-```
-
-Then launch with:
+Run the node directly with parameter overrides:
 
 ```bash
-ros2 run mqtt_ros mqtt_ros --ros-args --params-file params.yaml
+ros2 run mqtt_ros mqtt_ros_node --ros-args \
+  -p mqtt_broker:=192.168.1.100 \
+  -p mqtt_topic:=smarthome/flat_camera/ \
+  -p ros_topic:=/object_detection/objects_with_region
 ```
 
-## Message Format
+## Nodes
 
-Published ROS messages include the following structure (as JSON string):
+### mqtt_ros_node
+
+Connects to an MQTT broker, subscribes to `mqtt_topic` and publishes the
+parsed detections on `ros_topic`.
+
+#### Published Topics
+
+* **`/object_detection/objects_with_region`** (`object_with_region/ObjectRegion3DArray`)
+  Parsed object detections, configurable through the `ros_topic` parameter.
+
+#### Parameters
+
+| Parameter     | Type   | Default                                 | Description                           |
+| ------------- | ------ | --------------------------------------- | ------------------------------------- |
+| `mqtt_broker` | string | `localhost`                             | MQTT broker hostname or IP address.   |
+| `mqtt_port`   | int    | `1883`                                  | MQTT broker port.                     |
+| `client_id`   | string | `mqtt_ros_client`                       | MQTT client identifier.               |
+| `mqtt_topic`  | string | `smarthome/flat_camera/`                | MQTT topic to subscribe to.           |
+| `msgs_type`   | string | `ObjectRegion3DArray`                   | Output ROS message type.              |
+| `ros_topic`   | string | `/object_detection/objects_with_region` | ROS topic to publish the messages to. |
+
+## MQTT Message Format
+
+The `FlatCameraParser` expects JSON payloads with the following structure:
 
 ```json
 {
-  "source_topic": "smarthome/flat_camera/image",
-  "timestamp": 1234567890.123,
-  "data": {
-    "image": "base64_encoded_data",
-    "width": 640,
-    "height": 480
-  }
+  "region": "kitchen",
+  "id": "class_id",
+  "clase": "table",
+  "confianza": 0.75,
+  "centro_bb": {"x": 1.5, "y": 2.3, "z": 0.0},
+  "timestamp": {"segundos": 0, "nanosegundos": 0},
+  "camera_id": "0"
 }
 ```
 
-If the MQTT payload is not valid JSON, it will be published as a plain text string within the message.
+## Testing Publisher
 
-## Examples
-
-### Example 1: Temperature Sensor Bridge
-
-Subscribe to MQTT temperature sensor and republish in ROS:
+A standalone example publisher is provided to test the bridge without a real
+MQTT source:
 
 ```bash
-ros2 run mqtt_ros mqtt_ros --ros-args \
-  -p mqtt_broker:=localhost \
-  -p mqtt_port:=1883 \
-  -p mqtt_topic:=sensors/temperature \
-  -p ros_topic:=/sensors/temperature
+python3 src/mqtt_ros/mqtt_ros/mqtt_publisher_example.py \
+  --broker localhost --object table --region kitchen \
+  --x 1.5 --y 2.3 --confidence 0.75
 ```
-
-### Example 2: Multiple Sensors with Wildcard
-
-Subscribe to all sensors under a building:
-
-```bash
-ros2 run mqtt_ros mqtt_ros --ros-args \
-  -p mqtt_broker:=192.168.1.100 \
-  -p mqtt_topic:=building/sensors/# \
-  -p ros_topic:=/building/sensor_data
-```
-
-## Troubleshooting
-
-### Connection Issues
-
-- **Cannot connect to broker**: Verify the `mqtt_broker` and `mqtt_port` parameters
-- **Check network connectivity**: `ping <broker_address>`
-- **Verify broker is running**: Ensure the MQTT broker is accessible and running
-
-### Message Not Received
-
-- **Wrong MQTT topic**: Verify the `mqtt_topic` parameter matches the publisher's topic
-- **Check MQTT logs**: Enable MQTT broker logging for debugging
-- **ROS logging**: Run with `--log-level=debug` for detailed debug information
-
-## Debugging
-
-Enable debug logging:
-
-```bash
-ros2 run mqtt_ros mqtt_ros --ros-args --log-level=debug
-```
-
-Monitor published messages:
-
-```bash
-ros2 topic echo /your_ros_topic
-```
-
-## Node Architecture
-
-```
-┌─────────────────────────┐
-│   MQTT Broker           │
-│  (External System)      │
-└───────────┬─────────────┘
-            │
-            │ MQTT Protocol
-            │
-┌───────────▼─────────────┐
-│  MQTT Client            │
-│  (Async Loop Thread)    │
-└───────────┬─────────────┘
-            │
-            │ on_message callback
-            │
-┌───────────▼─────────────────────┐
-│  Message Processing             │
-│  - Parse JSON (if applicable)   │
-│  - Add metadata                 │
-│  - Enrich with timestamp        │
-└───────────┬─────────────────────┘
-            │
-            │ ROS Publish
-            │
-┌───────────▼─────────────┐
-│  ROS Topic              │
-│  (ros_topic parameter)  │
-└─────────────────────────┘
-```
-
-## Limitations
-
-- Messages are published as JSON strings in `String` type messages
-- No authentication support for MQTT broker (username/password)
-- SSL/TLS connection not supported in current version
-
-## Future Enhancements
-
-- Support for multiple MQTT subscriptions
-- Support for MQTT authentication (username/password)
-- Support for SSL/TLS connections
-- Automatic message type detection and conversion
-- Binary message support
 
 ## License
 
-[Add your license here]
+This project is licensed under the Apache License 2.0. See the
+[LICENSE](LICENSE) file for details.
 
-## Contributing
-
-Contributions are welcome! Please submit pull requests or issues to the project repository.
+[Ubuntu]: https://ubuntu.com/
+[ROS2]: https://docs.ros.org/en/rolling/

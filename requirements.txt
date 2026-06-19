@@ -1,0 +1,4 @@
+# MQTT client library used by the bridge node and the example publisher.
+paho-mqtt>=1.6.0
+pytest>=8.0.0
+pytest-cov>=5.0.0

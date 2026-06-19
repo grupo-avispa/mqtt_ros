@@ -1,285 +1,428 @@
-#!/usr/bin/env python3
+# Copyright (c) 2026 Jose Galeas
+# Copyright (c) 2026 Grupo Avispa, DTE, Universidad de Málaga
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
-ROS 2 node that listens to MQTT messages and republishes them as ROS messages.
-Generic bridge with topic-specific parsers for different message formats.
+MqttToRosBridge ROS 2 node.
+
+This module provides a ROS 2 node that subscribes to an MQTT broker and
+republishes the received MQTT messages as ROS 2 messages. The translation
+from the MQTT JSON payload to a ROS 2 message is delegated to topic-specific
+parsers registered in a :class:`ParserRegistry`.
 """
 
-import rclpy
-from rclpy.node import Node
-import paho.mqtt.client as mqtt
-import json
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from geometry_msgs.msg import PoseWithCovariance, Pose
-from vision_msgs.msg import Detection3D, ObjectHypothesisWithPose
+import json
+from typing import Dict, Optional
+
+from geometry_msgs.msg import Pose, PoseWithCovariance
+
 from object_with_region.msg import ObjectRegion3D, ObjectRegion3DArray
+
+import paho.mqtt.client as mqtt
+
+from rclpy.node import Node
+
+from vision_msgs.msg import BoundingBox3D, Detection3D, ObjectHypothesisWithPose
 
 
 class MQTTMessageParser(ABC):
-    """Base class for MQTT message parsers"""
-    
+    """Base class for MQTT message parsers."""
+
     @abstractmethod
-    def parse(self, data: dict, node: Node) -> ObjectRegion3DArray:
-        """Parse MQTT JSON data to ObjectRegion3DArray"""
-        pass
+    def parse(
+        self,
+        data: dict,
+        node: Node,
+    ) -> Optional[ObjectRegion3DArray]:
+        """
+        Parse an MQTT JSON payload into an ``ObjectRegion3DArray``.
+
+        Parameters
+        ----------
+        data : dict
+            The decoded JSON payload of the MQTT message.
+        node : Node
+            The owning ROS 2 node, used for logging.
+
+        Returns
+        -------
+        Optional[ObjectRegion3DArray]
+            The parsed message, or ``None`` if parsing failed.
+
+        """
+        raise NotImplementedError
 
 
 class FlatCameraParser(MQTTMessageParser):
-    """Parser for smarthome/flat_camera/ messages"""
-    
-    def parse(self, data: dict, node: Node) -> ObjectRegion3DArray:
+    """Parser for ``smarthome/flat_camera/`` messages."""
+
+    def parse(
+        self,
+        data: dict,
+        node: Node,
+    ) -> Optional[ObjectRegion3DArray]:
         """
-        Parse flat_camera MQTT messages.
-        
-        Expected input format:
-        {
-            "object_name": "table",
-            "region": "unknown",
-            "bbox_center": {
-                "x": 1.5,
-                "y": 2.3,
-                "z": 0.5
+        Parse a ``flat_camera`` MQTT message.
+
+        Expected input format::
+
+            {
+                "region": "unknown",
+                "id": "class_id",
+                "clase": "table",
+                "confianza": "0.0",
+                "centro_bb": {"x": 1.5, "y": 2.3},
+                "timestamp": {"segundos": 0, "nanosegundos": 0},
+                "camera_id": "0"
             }
-        }
+
+        Parameters
+        ----------
+        data : dict
+            The decoded JSON payload of the MQTT message.
+        node : Node
+            The owning ROS 2 node, used for logging.
+
+        Returns
+        -------
+        Optional[ObjectRegion3DArray]
+            The parsed message, or ``None`` if parsing failed.
+
         """
         try:
-            # Create the main message container
+            # Create the main message container.
             msg = ObjectRegion3DArray()
-            
-            # Set header with current timestamp
-            msg.header.stamp = node.get_clock().now().to_msg()
-            msg.header.frame_id = ''
-            
-            # Extract object_name and region from MQTT data
-            object_name = data.get('object_name', '')
+
+            # Extract fields from the MQTT payload.
+            confianza = data.get('confianza', 0.0)
+            object_name = data.get('clase', '')
             region = data.get('region', 'unknown')
-            bbox_center = data.get('bbox_center', {})
-            
+            bbox_center = data.get('centro_bb', {})
+            timestamp = data.get('timestamp', {})
+            camera_id = data.get('camera_id', '')
+
+            # Set header with the timestamp coming from the MQTT message.
+            stamp_sec = int(timestamp.get('segundos', 0))
+            stamp_nanosec = int(timestamp.get('nanosegundos', 0))
+            msg.header.stamp.sec = stamp_sec
+            msg.header.stamp.nanosec = stamp_nanosec
+            msg.header.frame_id = str(camera_id)
+
             if not object_name:
-                node.get_logger().warn('No "object_name" field in MQTT data')
+                node.get_logger().warning('No "clase" field in MQTT data')
                 return msg
-            
-            # Create ObjectRegion3D object
+
+            # Create the ObjectRegion3D object.
             object_region = ObjectRegion3D()
-            
-            # Create Detection3D with the class_id
+
+            # Create the Detection3D with the class id.
             detection = Detection3D()
-            detection.header.stamp = node.get_clock().now().to_msg()
-            detection.header.frame_id = ''
-            
-            # Add hypothesis with class_id
+            detection.header.stamp.sec = stamp_sec
+            detection.header.stamp.nanosec = stamp_nanosec
+            detection.header.frame_id = str(camera_id)
+
+            bounding_box = BoundingBox3D()
+            bounding_box.center.position.x = float(bbox_center.get('x', 0.0))
+            bounding_box.center.position.y = float(bbox_center.get('y', 0.0))
+            detection.bbox = bounding_box
+
+            # Add the hypothesis with the class id and score.
             hypothesis_with_pose = ObjectHypothesisWithPose()
             hypothesis_with_pose.hypothesis.class_id = str(object_name)
-            hypothesis_with_pose.hypothesis.score = 0.0
-            
-            # Set pose with bbox center if available
+            hypothesis_with_pose.hypothesis.score = float(confianza)
+
+            # Set the pose with the bbox center if available.
             hypothesis_with_pose.pose = PoseWithCovariance()
             hypothesis_with_pose.pose.pose = Pose()
-            
-            # Fill position from bbox_center if available
+
             if bbox_center:
-                hypothesis_with_pose.pose.pose.position.x = float(bbox_center.get('x', 0.0))
-                hypothesis_with_pose.pose.pose.position.y = float(bbox_center.get('y', 0.0))
-                hypothesis_with_pose.pose.pose.position.z = float(bbox_center.get('z', 0.0))
-            
-            # Set default orientation (identity quaternion)
+                pose = hypothesis_with_pose.pose.pose
+                pose.position.x = float(bbox_center.get('x', 0.0))
+                pose.position.y = float(bbox_center.get('y', 0.0))
+                pose.position.z = float(bbox_center.get('z', 0.0))
+
+            # Set the default orientation (identity quaternion).
             hypothesis_with_pose.pose.pose.orientation.x = 0.0
             hypothesis_with_pose.pose.pose.orientation.y = 0.0
             hypothesis_with_pose.pose.pose.orientation.z = 0.0
             hypothesis_with_pose.pose.pose.orientation.w = 1.0
-            
+
             detection.results.append(hypothesis_with_pose)
-            
-            # Assign object and region to ObjectRegion3D
+
+            # Assign the object and region to the ObjectRegion3D.
             object_region.object = detection
             object_region.region = str(region)
-            
+
             msg.objects.append(object_region)
-            
+
             return msg
-            
-        except Exception as e:
-            node.get_logger().error(f'Error parsing flat_camera message: {str(e)}')
+
+        except (ValueError, TypeError, AttributeError) as exc:
+            # The payload did not match the expected schema/types.
+            node.get_logger().error(
+                f'Error parsing flat_camera message: {exc}')
             return None
 
 
 class ParserRegistry:
-    """Registry for MQTT message parsers mapped to topics"""
-    
-    def __init__(self):
-        self.parsers = {}
+    """Registry that maps MQTT topics to their message parsers."""
+
+    def __init__(self) -> None:
+        """Initialize the registry with the default parsers."""
+        self.parsers: Dict[str, MQTTMessageParser] = {}
         self._register_default_parsers()
-    
-    def _register_default_parsers(self):
-        """Register default parsers for known topics"""
+
+    def _register_default_parsers(self) -> None:
+        """Register the default parsers for the known topics."""
         self.register('smarthome/flat_camera/', FlatCameraParser())
-    
-    def register(self, topic: str, parser: MQTTMessageParser):
-        """Register a parser for a specific topic"""
+
+    def register(self, topic: str, parser: MQTTMessageParser) -> None:
+        """
+        Register a parser for a specific topic.
+
+        Parameters
+        ----------
+        topic : str
+            The MQTT topic (or topic pattern) to associate with the parser.
+        parser : MQTTMessageParser
+            The parser instance to register.
+
+        """
         self.parsers[topic] = parser
-    
-    def get_parser(self, topic: str) -> MQTTMessageParser:
-        """Get parser for a topic, returns None if not found"""
+
+    def get_parser(self, topic: str) -> Optional[MQTTMessageParser]:
+        """
+        Return the parser registered for a topic.
+
+        Parameters
+        ----------
+        topic : str
+            The MQTT topic to look up.
+
+        Returns
+        -------
+        Optional[MQTTMessageParser]
+            The registered parser, or ``None`` if none is found.
+
+        """
         return self.parsers.get(topic)
-    
-    def register_wildcard(self, pattern: str, parser: MQTTMessageParser):
-        """Register parser for topic pattern (e.g., 'sensors/+'"""
-        self.parsers[pattern] = parser
 
 
 class MqttToRosBridge(Node):
-    def __init__(self):
-        super().__init__('mqtt_ros_node')
-        
-        # Declare and get parameters
+    """
+    ROS 2 node that bridges MQTT messages to ROS 2 topics.
+
+    The node connects to an MQTT broker, subscribes to a configurable topic
+    and republishes the parsed payloads as ``ObjectRegion3DArray`` messages.
+
+    Parameters
+    ----------
+    node_name : str
+        Name of the ROS 2 node (default: ``'mqtt_ros_node'``).
+
+    """
+
+    def __init__(self, node_name: str = 'mqtt_ros_node') -> None:
+        """
+        Initialize the bridge node.
+
+        Parameters
+        ----------
+        node_name : str
+            Name of the ROS 2 node (default: ``'mqtt_ros_node'``).
+
+        """
+        super().__init__(node_name)
+
+        # Declare and get parameters.
         self._declare_and_get_parameters()
-        
-        # Publisher de ROS
+
+        # ROS 2 publisher.
         self.ros_pub = self.create_publisher(self.msg_type, self.ros_topic, 10)
-        
-        # Initialize parser registry
+
+        # Parser registry.
         self.parser_registry = ParserRegistry()
-        
-        # Cliente MQTT
-        self.mqtt_client = mqtt.Client()
+
+        # MQTT client. ``CallbackAPIVersion`` only exists in paho-mqtt >= 2.0,
+        # so fall back to the legacy constructor for older versions.
+        try:
+            self.mqtt_client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION1, client_id=self.client_id)  # type: ignore
+        except AttributeError:
+            self.mqtt_client = mqtt.Client(client_id=self.client_id)
         self.mqtt_client.on_connect = self.on_mqtt_connect
         self.mqtt_client.on_message = self.on_mqtt_message
-        
+
         self.get_logger().info(
             f'Connecting to MQTT broker at {self.mqtt_broker}:{self.mqtt_port}')
-        
+        self.connect()
+
     def _declare_and_get_parameters(self) -> None:
         """Declare and retrieve all ROS 2 parameters."""
         self.declare_parameter('mqtt_broker', 'localhost')
         self.mqtt_broker = self.get_parameter('mqtt_broker').value
         self.get_logger().info(f'Parameter mqtt_broker: [{self.mqtt_broker}]')
-        
+
         self.declare_parameter('mqtt_port', 1883)
         self.mqtt_port = self.get_parameter('mqtt_port').value
         self.get_logger().info(f'Parameter mqtt_port: [{self.mqtt_port}]')
-        
+
         self.declare_parameter('client_id', 'mqtt_ros_client')
         self.client_id = self.get_parameter('client_id').value
         self.get_logger().info(f'Parameter client_id: [{self.client_id}]')
-        
+
         self.declare_parameter('mqtt_topic', 'smarthome/flat_camera/')
         self.mqtt_topic = self.get_parameter('mqtt_topic').value
         self.get_logger().info(f'Parameter mqtt_topic: [{self.mqtt_topic}]')
-        
+
         self.declare_parameter('msgs_type', 'ObjectRegion3DArray')
         msgs_type_str = self.get_parameter('msgs_type').value
-        if msgs_type_str == 'ObjectRegion3DArray':
-            self.msg_type = ObjectRegion3DArray
-        else:
-            self.get_logger().warn(
-                f'Unsupported msgs_type: {msgs_type_str}. Defaulting to ObjectRegion3DArray')
-            self.msg_type = ObjectRegion3DArray
+        if msgs_type_str != 'ObjectRegion3DArray':
+            self.get_logger().warning(
+                f'Unsupported msgs_type: {msgs_type_str}. '
+                'Defaulting to ObjectRegion3DArray')
+        self.msg_type = ObjectRegion3DArray
         self.get_logger().info(f'Parameter msgs_type: [{msgs_type_str}]')
-        
-        self.declare_parameter('ros_topic', '/object_detection/objects_with_region')
+
+        self.declare_parameter(
+            'ros_topic', '/object_detection/objects_with_region')
         self.ros_topic = self.get_parameter('ros_topic').value
         self.get_logger().info(f'Parameter ros_topic: [{self.ros_topic}]')
 
-    def on_mqtt_connect(self, client, userdata, flags, rc):
-        """Callback when connecting to MQTT broker"""
+    def on_mqtt_connect(self, client, userdata, flags, rc) -> None:
+        """
+        Handle the MQTT broker connection result.
+
+        Parameters
+        ----------
+        client : paho.mqtt.client.Client
+            The MQTT client instance.
+        userdata : Any
+            The user data set in the client (unused).
+        flags : dict
+            Response flags sent by the broker.
+        rc : int
+            The connection result code (0 means success).
+
+        """
         if rc == 0:
             self.get_logger().info('Successfully connected to MQTT broker')
-            # Subscribe to topic
             client.subscribe(self.mqtt_topic)
-            self.get_logger().info(f'Subscribed to MQTT topic: {self.mqtt_topic}')
+            self.get_logger().info(
+                f'Subscribed to MQTT topic: {self.mqtt_topic}')
         else:
             self.get_logger().error(f'MQTT connection error. Code: {rc}')
-    
-    def on_mqtt_message(self, client, userdata, msg):
-        """Callback when receiving MQTT message"""
+
+    def on_mqtt_message(self, client, userdata, msg) -> None:
+        """
+        Handle an incoming MQTT message.
+
+        Parameters
+        ----------
+        client : paho.mqtt.client.Client
+            The MQTT client instance (unused).
+        userdata : Any
+            The user data set in the client (unused).
+        msg : paho.mqtt.client.MQTTMessage
+            The received MQTT message.
+
+        """
+        mqtt_topic = msg.topic
+        self.get_logger().debug(f'Message received from {mqtt_topic}')
+
         try:
-            # Decode MQTT payload
             mqtt_payload = msg.payload.decode('utf-8')
-            mqtt_topic = msg.topic
-            
-            self.get_logger().debug(f'Message received from {mqtt_topic}')
-            
-            # Parse JSON message
-            try:
-                data = json.loads(mqtt_payload)
-                ros_message = self._parse_message(mqtt_topic, data)
-                
-                if ros_message:
-                    # Publish in ROS
-                    self.ros_pub.publish(ros_message)
-                    self.get_logger().debug(
-                        f'Published ObjectRegion3DArray with {len(ros_message.objects)} objects')
-                else:
-                    self.get_logger().warn(f'Failed to parse message from {mqtt_topic}')
-            except json.JSONDecodeError:
-                self.get_logger().warn(
-                    f'Invalid JSON received from {mqtt_topic}: {mqtt_payload[:100]}')
-            
-        except Exception as e:
-            self.get_logger().error(f'Error processing MQTT message: {str(e)}')
-    
-    def _parse_message(self, topic: str, data: dict) -> ObjectRegion3DArray:
+            data = json.loads(mqtt_payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.get_logger().warning(f'Invalid payload received from {mqtt_topic}')
+            return
+
+        ros_message = self._parse_message(mqtt_topic, data)
+        if ros_message is None:
+            self.get_logger().warning(f'Failed to parse message from {mqtt_topic}')
+            return
+
+        self.ros_pub.publish(ros_message)
+        self.get_logger().debug(
+            f'Published ObjectRegion3DArray with '
+            f'{len(ros_message.objects)} objects')
+
+    def _parse_message(
+        self,
+        topic: str,
+        data: dict,
+    ) -> Optional[ObjectRegion3DArray]:
         """
-        Parse MQTT message using appropriate parser for the topic.
-        
-        First tries exact topic match, then tries pattern matching.
+        Parse an MQTT message using the parser registered for the topic.
+
+        Tries an exact topic match first, then a wildcard subscription match.
+
+        Parameters
+        ----------
+        topic : str
+            The MQTT topic the message was received on.
+        data : dict
+            The decoded JSON payload.
+
+        Returns
+        -------
+        Optional[ObjectRegion3DArray]
+            The parsed message, or ``None`` if no parser handled it.
+
         """
-        # Try exact topic match first
+        # Try an exact topic match first.
         parser = self.parser_registry.get_parser(topic)
-        
-        if parser:
+        if parser is not None:
             return parser.parse(data, self)
-        
-        # Try to match subscribed topic if this is a wildcard subscription
-        # Check if the current message topic matches the subscribed pattern
+
+        # Try to match against a wildcard subscription pattern.
         if self.mqtt_topic.endswith('#') or self.mqtt_topic.endswith('+'):
-            # Extract base topic and try to find a matching parser
-            base_topic = self.mqtt_topic.rstrip('/#')
+            base_topic = self.mqtt_topic.rstrip('/#+')
             if topic.startswith(base_topic):
                 parser = self.parser_registry.get_parser(self.mqtt_topic)
-                if parser:
+                if parser is not None:
                     return parser.parse(data, self)
-        
-        self.get_logger().warn(
+
+        self.get_logger().warning(
             f'No parser found for topic: {topic}. '
-            f'Available topics: {list(self.parser_registry.parsers.keys())}'
-        )
+            f'Available topics: {list(self.parser_registry.parsers.keys())}')
         return None
-    
-    def start(self):
-        """Start the bridge"""
+
+    def connect(self) -> None:
+        """Connect to the MQTT broker and start the network loop."""
         try:
-            # Connect to MQTT broker
             self.mqtt_client.connect(self.mqtt_broker, self.mqtt_port, 60)
-            
-            # Start MQTT loop in separate thread
             self.mqtt_client.loop_start()
-            
-            self.get_logger().info('MQTT->ROS Bridge started')
-            
-            # Keep the node active
-            rclpy.spin(self)
-            
-        except Exception as e:
-            self.get_logger().error(f'Error starting the bridge: {str(e)}')
-        finally:
-            # Cleanup on exit
-            self.mqtt_client.loop_stop()
-            self.mqtt_client.disconnect()
-            self.get_logger().info('MQTT->ROS Bridge stopped')
+            self.get_logger().info('MQTT->ROS bridge started')
+        except OSError as exc:
+            # Network/connection errors (broker unreachable, refused, ...).
+            self.get_logger().error(f'Error starting the bridge: {exc}')
 
+    def destroy_node(self) -> None:
+        """
+        Stop the MQTT client and destroy the node.
 
-def main(args=None):
-    rclpy.init(args=args)
-    
-    bridge = MqttToRosBridge()
-    try:
-        bridge.start()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        bridge.destroy_node()
-        rclpy.shutdown()
+        Returns
+        -------
+        bool
+            ``True`` if the node was successfully destroyed.
 
-
-if __name__ == '__main__':
-    main()
+        """
+        self.mqtt_client.loop_stop()
+        self.mqtt_client.disconnect()
+        self.get_logger().info('MQTT->ROS bridge stopped')
+        super().destroy_node()

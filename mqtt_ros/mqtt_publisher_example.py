@@ -1,213 +1,237 @@
-#!/usr/bin/env python3
+# Copyright (c) 2026 Jose Galeas
+# Copyright (c) 2026 Grupo Avispa, DTE, Universidad de Málaga
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
-Example MQTT publisher for testing the MQTT to ROS bridge.
-Publishes object detection messages in the format expected by mqtt_ros node.
+Example MQTT publisher to test the MQTT to ROS bridge.
+
+This standalone script publishes object detection messages using the JSON
+schema expected by the ``FlatCameraParser`` of the ``mqtt_ros`` node.
 """
 
-import paho.mqtt.client as mqtt
-import json
-import time
+from __future__ import annotations
+
 import argparse
+import json
+import sys
+import time
 from typing import Optional
+
+import paho.mqtt.client as mqtt
 
 
 class MQTTObjectPublisher:
-    """Example publisher for object detection messages via MQTT"""
-    
-    def __init__(self, broker: str = 'localhost', port: int = 1883, client_id: str = 'mqtt_publisher'):
+    """
+    Example publisher for object detection messages over MQTT.
+
+    Parameters
+    ----------
+    broker : str
+        MQTT broker hostname or IP address (default: ``'localhost'``).
+    port : int
+        MQTT broker port (default: ``1883``).
+    client_id : str
+        MQTT client identifier (default: ``'mqtt_publisher'``).
+
+    """
+
+    def __init__(
+        self,
+        broker: str = 'localhost',
+        port: int = 1883,
+        client_id: str = 'mqtt_publisher',
+    ) -> None:
+        """Initialize the publisher and its MQTT client."""
         self.broker = broker
         self.port = port
         self.client_id = client_id
-        self.client = mqtt.Client(client_id)
+
+        # ``CallbackAPIVersion`` only exists in paho-mqtt >= 2.0, so fall back
+        # to the legacy constructor for older versions.
+        try:
+            self.client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION1, client_id=client_id)  # type: ignore
+        except AttributeError:
+            self.client = mqtt.Client(client_id=client_id)
         self.client.on_connect = self.on_connect
         self.client.on_disconnect = self.on_disconnect
-    
-    def on_connect(self, client, userdata, flags, rc):
-        """Callback when connecting to MQTT broker"""
+
+    def on_connect(self, client, userdata, flags, rc) -> None:
+        """Print the result of the connection attempt."""
         if rc == 0:
-            print(f'✓ Successfully connected to MQTT broker at {self.broker}:{self.port}')
+            print(f'Connected to MQTT broker at {self.broker}:{self.port}')
         else:
-            print(f'✗ MQTT connection error. Code: {rc}')
-    
-    def on_disconnect(self, client, userdata, rc):
-        """Callback when disconnecting from MQTT broker"""
+            print(f'MQTT connection error. Code: {rc}')
+
+    def on_disconnect(self, client, userdata, rc) -> None:
+        """Print the result of the disconnection."""
         if rc != 0:
-            print(f'✗ Unexpected disconnection. Code: {rc}')
+            print(f'Unexpected disconnection. Code: {rc}')
         else:
-            print('✓ Successfully disconnected from MQTT broker')
-    
-    def connect(self):
-        """Connect to MQTT broker"""
+            print('Disconnected from MQTT broker')
+
+    def connect(self) -> bool:
+        """
+        Connect to the MQTT broker and start the network loop.
+
+        Returns
+        -------
+        bool
+            ``True`` if the connection was established, ``False`` otherwise.
+
+        """
         try:
             self.client.connect(self.broker, self.port, 60)
             self.client.loop_start()
-            # Give it a moment to connect
+            # Give the client a moment to establish the connection.
             time.sleep(1)
-        except Exception as e:
-            print(f'✗ Error connecting to broker: {str(e)}')
+        except OSError as exc:
+            print(f'Error connecting to broker: {exc}')
             return False
         return True
-    
-    def publish_object(self, object_name: str, region: str, mqtt_topic: str = 'smarthome/flat_camera/', bbox_center: Optional[dict] = None):
+
+    def publish_object(
+        self,
+        object_name: str,
+        region: str,
+        mqtt_topic: str = 'smarthome/flat_camera/',
+        bbox_center: Optional[dict] = None,
+        confidence: float = 0.0,
+    ) -> None:
         """
-        Publish an object detection message to MQTT.
-        
-        Args:
-            object_name: The name of the detected object (e.g., 'chair')
-            region: The region where the object is located (e.g., 'kitchen')
-            mqtt_topic: The MQTT topic to publish to
-            bbox_center: Optional dict with 'x', 'y', 'z' coordinates of bbox center
+        Publish a single object detection message to MQTT.
+
+        Parameters
+        ----------
+        object_name : str
+            Name of the detected object (e.g. ``'chair'``).
+        region : str
+            Region where the object is located (e.g. ``'kitchen'``).
+        mqtt_topic : str
+            MQTT topic to publish to.
+        bbox_center : Optional[dict]
+            Optional ``{'x', 'y', 'z'}`` coordinates of the bbox center.
+        confidence : float
+            Detection confidence score.
+
         """
+        center = bbox_center or {}
         message = {
-            'object_name': object_name,
-            'region': region
+            'region': region,
+            'clase': object_name,
+            'confianza': float(confidence),
+            'centro_bb': {
+                'x': float(center.get('x', 0.0)),
+                'y': float(center.get('y', 0.0)),
+                'z': float(center.get('z', 0.0)),
+            },
+            'timestamp': {'segundos': 0, 'nanosegundos': 0},
+            'camera_id': '0',
         }
-        
-        # Add bbox_center if provided
-        if bbox_center:
-            message['bbox_center'] = {
-                'x': float(bbox_center.get('x', 0.0)),
-                'y': float(bbox_center.get('y', 0.0)),
-                'z': float(bbox_center.get('z', 0.0))
-            }
-        
-        try:
-            result = self.client.publish(mqtt_topic, json.dumps(message), qos=1)
-            if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                print(f'✓ Published: {object_name} in {region} to {mqtt_topic}')
-                print(f'  Payload: {json.dumps(message, indent=2)}')
-            else:
-                print(f'✗ Failed to publish message. Error code: {result.rc}')
-        except Exception as e:
-            print(f'✗ Error publishing message: {str(e)}')
-    
-    def publish_multiple(self, objects: list, mqtt_topic: str = 'smarthome/flat_camera/', interval: float = 2.0):
-        """
-        Publish multiple objects sequentially with delay.
-        
-        Args:
-            objects: List of tuples (object_name, region) or dicts with object_name, region, bbox_center
-            mqtt_topic: The MQTT topic to publish to
-            interval: Time in seconds between publications
-        """
-        for idx, obj in enumerate(objects):
-            if isinstance(obj, dict):
-                self.publish_object(
-                    obj['object_name'], 
-                    obj['region'], 
-                    mqtt_topic,
-                    obj.get('bbox_center')
-                )
-            else:
-                self.publish_object(obj[0], obj[1], mqtt_topic)
-            
-            if idx < len(objects) - 1:
-                time.sleep(interval)
-    
-    def disconnect(self):
-        """Disconnect from MQTT broker"""
+
+        result = self.client.publish(mqtt_topic, json.dumps(message), qos=1)
+        if result.rc == mqtt.MQTT_ERR_SUCCESS:
+            print(f'Published: {object_name} in {region} to {mqtt_topic}')
+        else:
+            print(f'Failed to publish message. Error code: {result.rc}')
+
+    def disconnect(self) -> None:
+        """Stop the network loop and disconnect from the broker."""
         self.client.loop_stop()
         self.client.disconnect()
 
 
-def main():
+def _parse_args() -> argparse.Namespace:
+    """
+    Parse the command-line arguments.
+
+    Returns
+    -------
+    argparse.Namespace
+        The parsed command-line arguments.
+
+    """
     parser = argparse.ArgumentParser(
-        description='MQTT object detection publisher for testing mqtt_ros bridge'
-    )
+        description='MQTT object detection publisher to test the mqtt_ros '
+                    'bridge')
     parser.add_argument(
-        '--broker', 
-        default='localhost',
-        help='MQTT broker address (default: localhost)'
-    )
+        '--broker', default='localhost',
+        help='MQTT broker address (default: localhost)')
     parser.add_argument(
-        '--port',
-        type=int,
-        default=1883,
-        help='MQTT broker port (default: 1883)'
-    )
+        '--port', type=int, default=1883,
+        help='MQTT broker port (default: 1883)')
     parser.add_argument(
-        '--topic',
-        default='smarthome/flat_camera/',
-        help='MQTT topic to publish to (default: smarthome/flat_camera/)'
-    )
+        '--topic', default='smarthome/flat_camera/',
+        help='MQTT topic to publish to (default: smarthome/flat_camera/)')
     parser.add_argument(
-        '--object',
-        required=True,
-        help='Object name (e.g., chair, table, person)'
-    )
+        '--object', required=True,
+        help='Object name (e.g. chair, table, person)')
     parser.add_argument(
-        '--region',
-        required=True,
-        help='Region name (e.g., kitchen, bedroom, hallway)'
-    )
+        '--region', required=True,
+        help='Region name (e.g. kitchen, bedroom, hallway)')
     parser.add_argument(
-        '--x',
-        type=float,
-        default=None,
-        help='X coordinate of bbox center'
-    )
+        '--confidence', type=float, default=0.0,
+        help='Detection confidence score (default: 0.0)')
+    parser.add_argument('--x', type=float, default=0.0,
+                        help='X coordinate of the bbox center')
+    parser.add_argument('--y', type=float, default=0.0,
+                        help='Y coordinate of the bbox center')
+    parser.add_argument('--z', type=float, default=0.0,
+                        help='Z coordinate of the bbox center')
     parser.add_argument(
-        '--y',
-        type=float,
-        default=None,
-        help='Y coordinate of bbox center'
-    )
+        '--loop', type=int, default=1,
+        help='Number of times to publish (default: 1)')
     parser.add_argument(
-        '--z',
-        type=float,
-        default=None,
-        help='Z coordinate of bbox center'
-    )
-    parser.add_argument(
-        '--loop',
-        type=int,
-        default=1,
-        help='Number of times to publish (default: 1)'
-    )
-    parser.add_argument(
-        '--interval',
-        type=float,
-        default=2.0,
-        help='Interval between publications in seconds (default: 2.0)'
-    )
-    
-    args = parser.parse_args()
-    
-    # Create publisher
+        '--interval', type=float, default=2.0,
+        help='Interval between publications in seconds (default: 2.0)')
+    return parser.parse_args()
+
+
+def main() -> int:
+    """
+    Run the example publisher.
+
+    Returns
+    -------
+    int
+        Process exit code (0 on success, 1 on connection failure).
+
+    """
+    args = _parse_args()
+
     publisher = MQTTObjectPublisher(
         broker=args.broker,
         port=args.port,
-        client_id='mqtt_publisher_example'
-    )
-    
-    # Connect to broker
+        client_id='mqtt_publisher_example')
+
     if not publisher.connect():
         return 1
-    
-    # Prepare bbox_center if coordinates were provided
-    bbox_center = None
-    if args.x is not None or args.y is not None or args.z is not None:
-        bbox_center = {
-            'x': args.x if args.x is not None else 0.0,
-            'y': args.y if args.y is not None else 0.0,
-            'z': args.z if args.z is not None else 0.0
-        }
-    
+
+    bbox_center = {'x': args.x, 'y': args.y, 'z': args.z}
+
     try:
-        # Publish object(s)
-        if args.loop == 1:
-            publisher.publish_object(args.object, args.region, args.topic, bbox_center)
-        else:
-            # For multiple publications, publish the same object multiple times
-            for i in range(args.loop):
-                publisher.publish_object(args.object, args.region, args.topic, bbox_center)
-                if i < args.loop - 1:
-                    time.sleep(args.interval)
+        for i in range(args.loop):
+            publisher.publish_object(
+                args.object, args.region, args.topic, bbox_center,
+                args.confidence)
+            if i < args.loop - 1:
+                time.sleep(args.interval)
     finally:
         publisher.disconnect()
-    
+
     return 0
 
 
 if __name__ == '__main__':
-    exit(main())
+    sys.exit(main())
